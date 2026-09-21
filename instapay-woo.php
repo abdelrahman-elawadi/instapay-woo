@@ -3,8 +3,7 @@
  * Plugin Name: Instapay WooCommerce Gateway
  * Description: Instapay payment gateway for WooCommerce with secure receipt upload and AI-powered manager verification.
  * Version: 1.0.0
- * Author: Recipe Code
- * Author URI: https://recipe.codes
+ * Author: Instapay Woo Team
  * Text Domain: instapay-woo
  */
 
@@ -14,6 +13,43 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 define( 'INSTAPAY_WOO_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'INSTAPAY_WOO_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+
+function instapay_woo_get_receipts_dir() {
+    $upload_dir = wp_upload_dir();
+    return trailingslashit( $upload_dir['basedir'] ) . 'instapay_receipts';
+}
+
+function instapay_woo_get_valid_receipt_path( $order_id ) {
+    $receipt_path = get_post_meta( $order_id, '_instapay_receipt_path', true );
+    $receipt_file = get_post_meta( $order_id, '_instapay_receipt_filename', true );
+
+    if ( empty( $receipt_path ) || ! file_exists( $receipt_path ) ) {
+        return '';
+    }
+
+    $real_receipt_path = realpath( $receipt_path );
+    $real_receipts_dir = realpath( instapay_woo_get_receipts_dir() );
+    if ( ! $real_receipt_path || ! $real_receipts_dir ) {
+        return '';
+    }
+
+    $normalized_receipt_path = wp_normalize_path( $real_receipt_path );
+    $normalized_receipts_dir = trailingslashit( wp_normalize_path( $real_receipts_dir ) );
+    if ( strpos( $normalized_receipt_path, $normalized_receipts_dir ) !== 0 ) {
+        return '';
+    }
+
+    if ( ! empty( $receipt_file ) && basename( $normalized_receipt_path ) !== $receipt_file ) {
+        return '';
+    }
+
+    $file_type = wp_check_filetype( $normalized_receipt_path );
+    if ( ! in_array( $file_type['type'], array( 'image/jpeg', 'image/png', 'image/webp' ), true ) ) {
+        return '';
+    }
+
+    return $normalized_receipt_path;
+}
 
 // Check if WooCommerce is active on activation
 register_activation_hook( __FILE__, 'instapay_woo_activation_check' );
@@ -86,8 +122,13 @@ function instapay_woo_add_gateway( $methods ) {
 add_action( 'init', 'instapay_woo_secure_image_view' );
 function instapay_woo_secure_image_view() {
     if ( isset( $_GET['instapay_view_receipt'] ) && isset( $_GET['order_id'] ) ) {
-        $order_id = intval( $_GET['order_id'] );
+        $order_id = absint( wp_unslash( $_GET['order_id'] ) );
+        $nonce    = isset( $_GET['_iwvnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_iwvnonce'] ) ) : '';
         $order = wc_get_order( $order_id );
+
+        if ( ! wp_verify_nonce( $nonce, 'instapay_view_receipt_' . $order_id ) ) {
+            wp_die( 'Invalid security token.' );
+        }
         
         $can_view = false;
         if ( current_user_can( 'edit_shop_orders' ) ) {
@@ -100,11 +141,13 @@ function instapay_woo_secure_image_view() {
             wp_die( 'Unauthorized access' );
         }
         
-        $receipt_path = get_post_meta( $order_id, '_instapay_receipt_path', true );
+        $receipt_path = instapay_woo_get_valid_receipt_path( $order_id );
         
-        if ( $receipt_path && file_exists( $receipt_path ) ) {
+        if ( $receipt_path ) {
             $file_info = wp_check_filetype( $receipt_path );
             $mime = $file_info['type'] ? $file_info['type'] : 'image/jpeg';
+            nocache_headers();
+            header( 'X-Content-Type-Options: nosniff' );
             header( 'Content-Type: ' . $mime );
             readfile( $receipt_path );
             exit;
@@ -136,8 +179,7 @@ function instapay_woo_process_upload_file( $file, $order_id ) {
         return new WP_Error( 'too_large', __( 'File size too large. Maximum allowed is 5MB.', 'instapay-woo' ) );
     }
 
-    $upload_dir = wp_upload_dir();
-    $secure_dir = $upload_dir['basedir'] . '/instapay_receipts';
+    $secure_dir = instapay_woo_get_receipts_dir();
     
     if ( ! file_exists( $secure_dir ) ) {
         wp_mkdir_p( $secure_dir );
@@ -145,7 +187,7 @@ function instapay_woo_process_upload_file( $file, $order_id ) {
         file_put_contents( $secure_dir . '/index.php', "<?php // Silence is golden" );
     }
 
-    $filename = 'order_' . $order_id . '_' . wp_generate_password( 12, false ) . '.' . $validate_file['ext'];
+    $filename = wp_unique_filename( $secure_dir, 'order_' . $order_id . '_' . wp_generate_password( 12, false ) . '.' . $validate_file['ext'] );
     $file_path = $secure_dir . '/' . $filename;
 
     if ( move_uploaded_file( $file['tmp_name'], $file_path ) ) {
@@ -174,16 +216,21 @@ function instapay_woo_handle_receipt_upload() {
         wp_send_json_error( __( 'Missing parameters.', 'instapay-woo' ) );
     }
 
-    $order_id  = intval( $_POST['order_id'] );
-    $order_key = sanitize_text_field( $_POST['order_key'] );
+    $order_id  = absint( wp_unslash( $_POST['order_id'] ) );
+    $order_key = sanitize_text_field( wp_unslash( $_POST['order_key'] ) );
+    $nonce     = sanitize_text_field( wp_unslash( $_POST['instapay_nonce'] ) );
 
-    if ( ! wp_verify_nonce( $_POST['instapay_nonce'], 'instapay_upload_nonce_' . $order_id ) ) {
+    if ( ! wp_verify_nonce( $nonce, 'instapay_upload_nonce_' . $order_id ) ) {
         wp_send_json_error( __( 'Security verification failed.', 'instapay-woo' ) );
     }
 
     $order = wc_get_order( $order_id );
-    if ( ! $order || $order->get_order_key() !== $order_key ) {
+    if ( ! $order || ! hash_equals( (string) $order->get_order_key(), (string) $order_key ) || $order->get_payment_method() !== 'instapay' ) {
         wp_send_json_error( __( 'Invalid order.', 'instapay-woo' ) );
+    }
+
+    if ( in_array( $order->get_status(), array( 'processing', 'completed', 'cancelled', 'refunded' ), true ) ) {
+        wp_send_json_error( __( 'Receipt upload is not allowed for this order status.', 'instapay-woo' ) );
     }
 
     if ( empty( $_FILES['instapay_receipt'] ) || $_FILES['instapay_receipt']['error'] !== UPLOAD_ERR_OK ) {
@@ -281,8 +328,8 @@ function instapay_woo_cleanup_receipts() {
     );
     $orders = wc_get_orders( $args );
     foreach ( $orders as $order_id ) {
-        $path = get_post_meta( $order_id, '_instapay_receipt_path', true );
-        if ( $path && file_exists( $path ) ) {
+        $path = instapay_woo_get_valid_receipt_path( $order_id );
+        if ( $path ) {
             unlink( $path );
             delete_post_meta( $order_id, '_instapay_receipt_path' );
             delete_post_meta( $order_id, '_instapay_receipt_filename' );
@@ -323,9 +370,9 @@ function instapay_woo_dashboard_widget_display() {
         printf( 
             '<li style="margin-bottom:8px;"><a href="%s"><strong>#%s</strong></a> - %s <span style="color:#646970; font-size:12px;">(%s)</span></li>', 
             esc_url( $edit_url ), 
-            $order->get_order_number(), 
+            esc_html( $order->get_order_number() ), 
             wp_strip_all_tags( $order->get_formatted_order_total() ),
-            wc_format_datetime( $order->get_date_created() )
+            esc_html( wc_format_datetime( $order->get_date_created() ) )
         );
     }
     echo '</ul>';
@@ -386,8 +433,8 @@ function instapay_woo_attach_receipt_to_email( $attachments, $email_id, $order, 
     // Attach to the admin "new_order" email or "customer_processing" just in case.
     if ( in_array( $email_id, array( 'new_order' ) ) ) {
         if ( $order->get_payment_method() === 'instapay' ) {
-            $path = get_post_meta( $order->get_id(), '_instapay_receipt_path', true );
-            if ( $path && file_exists( $path ) ) {
+            $path = instapay_woo_get_valid_receipt_path( $order->get_id() );
+            if ( $path ) {
                 $attachments[] = $path;
             }
         }
@@ -409,18 +456,23 @@ function instapay_woo_register_rest_route() {
 }
 
 function instapay_woo_rest_permissions_check( $request ) {
-    $order_id = $request->get_param( 'order_id' );
-    $order_key = $request->get_param( 'order_key' );
+    $order_id  = absint( $request->get_param( 'order_id' ) );
+    $order_key = sanitize_text_field( (string) $request->get_param( 'order_key' ) );
     
     $order = wc_get_order( $order_id );
-    if ( ! $order || $order->get_order_key() !== $order_key ) {
+    if ( ! $order || ! hash_equals( (string) $order->get_order_key(), (string) $order_key ) || $order->get_payment_method() !== 'instapay' ) {
         return new WP_Error( 'instapay_rest_unauthorized', __( 'Invalid order ID or key.', 'instapay-woo' ), array( 'status' => 401 ) );
     }
+
+    if ( in_array( $order->get_status(), array( 'processing', 'completed', 'cancelled', 'refunded' ), true ) ) {
+        return new WP_Error( 'instapay_rest_forbidden', __( 'Receipt upload is not allowed for this order status.', 'instapay-woo' ), array( 'status' => 403 ) );
+    }
+
     return true;
 }
 
 function instapay_woo_rest_upload_receipt( $request ) {
-    $order_id = $request->get_param( 'order_id' );
+    $order_id = absint( $request->get_param( 'order_id' ) );
     
     if ( empty( $_FILES['instapay_receipt'] ) || $_FILES['instapay_receipt']['error'] !== UPLOAD_ERR_OK ) {
         return new WP_Error( 'instapay_rest_no_file', __( 'No file uploaded.', 'instapay-woo' ), array( 'status' => 400 ) );

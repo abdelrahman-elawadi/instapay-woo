@@ -2,8 +2,7 @@
 
 A professional, enterprise-grade Instapay payment gateway plugin for WooCommerce. Allow your customers to seamlessly check out via Instapay (Egypt) with automated receipt screenshot uploads, secure storage, and advanced administrative dashboards.
 
-**👨‍💻 Developed by:** [Recipe Codes](https://recipe.codes)  
-**🌐 Author:** Mario M. Samy
+**👨‍💻 Maintained by:** Instapay Woo Team
 
 *(Scroll down for Arabic | انزل للأسفل للغة العربية)*
 
@@ -62,8 +61,7 @@ A professional, enterprise-grade Instapay payment gateway plugin for WooCommerce
 
 إضافة احترافية ومتقدمة لبوابة دفع إنستاباي الخاصة بووكومرس. تتيح لعملائك الدفع بسلاسة عبر إنستاباي (مصر) مع ميزات الرفع التلقائي لصور الإيصالات، التخزين الآمن، ولوحات تحكم إدارية متطورة.
 
-**👨‍💻 تم التطوير بواسطة:** [Recipe Codes](https://recipe.codes)  
-**🌐 المبرمج:** Mario M. Samy
+**👨‍💻 يتم الصيانة بواسطة:** فريق Instapay Woo
 
 ### ✨ المميزات
 

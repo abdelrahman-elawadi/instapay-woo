@@ -36,10 +36,6 @@ class WC_Gateway_Instapay extends WC_Payment_Gateway {
         add_action( 'woocommerce_view_order', array( $this, 'thankyou_page' ) ); // Show in My Account -> View Order
         add_action( 'woocommerce_receipt_' . $this->id, array( $this, 'thankyou_page' ) ); // Quick payment link hook
         
-        // Handle upload
-        add_action( 'wp_ajax_instapay_upload_receipt', array( $this, 'handle_receipt_upload' ) );
-        add_action( 'wp_ajax_nopriv_instapay_upload_receipt', array( $this, 'handle_receipt_upload' ) );
-        
         // Admin UI - Meta Box
         add_action( 'add_meta_boxes', array( $this, 'register_instapay_meta_box' ), 10, 2 );
     }
@@ -231,7 +227,8 @@ class WC_Gateway_Instapay extends WC_Payment_Gateway {
         if ( $receipt_uploaded ) {
             $view_url = add_query_arg( array(
                 'instapay_view_receipt' => 1,
-                'order_id'              => $order->get_id()
+                'order_id'              => $order->get_id(),
+                '_iwvnonce'             => wp_create_nonce( 'instapay_view_receipt_' . $order->get_id() ),
             ), site_url() );
 
             if ( in_array( $order->get_status(), array( 'payment-review', 'processing', 'completed' ) ) ) {
@@ -388,6 +385,7 @@ class WC_Gateway_Instapay extends WC_Payment_Gateway {
             $view_url = add_query_arg( array(
                 'instapay_view_receipt' => 1,
                 'order_id'              => $order->get_id(),
+                '_iwvnonce'             => wp_create_nonce( 'instapay_view_receipt_' . $order->get_id() ),
                 'TB_iframe'             => 'true',
                 'width'                 => 600,
                 'height'                => 800
@@ -399,7 +397,8 @@ class WC_Gateway_Instapay extends WC_Payment_Gateway {
             // Display thumbnail inline
             $thumb_url = add_query_arg( array(
                 'instapay_view_receipt' => 1,
-                'order_id'              => $order->get_id()
+                'order_id'              => $order->get_id(),
+                '_iwvnonce'             => wp_create_nonce( 'instapay_view_receipt_' . $order->get_id() ),
             ), admin_url() );
             echo '<p><a href="' . esc_url( $view_url ) . '" class="thickbox"><img src="' . esc_url( $thumb_url ) . '" style="max-width:100%; height:auto; border:1px solid #ccc; border-radius:4px; margin-top:10px; display:block;" alt="Receipt Thumbnail" /></a></p>';
 
